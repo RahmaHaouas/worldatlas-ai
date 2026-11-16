@@ -2,7 +2,7 @@
 
 *Weekend Challenge: No Pipeline, No Problem*
 
-> Demo video: **[link to your < 3 min video]** · Code: **[link to your public repo]**
+> Demo video: **(https://youtu.be/r6thJtT2dqg?si=67HN_8myi_Y5LnJG)** 
 
 ## The problem
 
