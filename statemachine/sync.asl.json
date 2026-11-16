@@ -1,0 +1,116 @@
+{
+  "Comment": "WorldAtlas AI - Data Update Service. Scheduled by EventBridge Scheduler. Ingests World Bank + Natural Earth, seeds curated knowledge, pulls UN Comtrade exports, computes RCA, rebuilds the RAG index.",
+  "StartAt": "IngestReferenceData",
+  "States": {
+    "IngestReferenceData": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "SyncCountries",
+          "States": {
+            "SyncCountries": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": { "FunctionName": "${SyncCountriesArn}", "Payload.$": "$" },
+              "ResultSelector": { "result.$": "$.Payload" },
+              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 5, "MaxAttempts": 2, "BackoffRate": 2 }],
+              "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "CountriesFailed" }],
+              "End": true
+            },
+            "CountriesFailed": {
+              "Type": "Pass",
+              "Parameters": { "result": { "step": "SyncCountries", "failed": true, "error.$": "$.error.Cause" } },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "SyncGeo",
+          "States": {
+            "SyncGeo": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": { "FunctionName": "${SyncGeoArn}", "Payload.$": "$" },
+              "ResultSelector": { "result.$": "$.Payload" },
+              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 5, "MaxAttempts": 2, "BackoffRate": 2 }],
+              "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "GeoFailed" }],
+              "End": true
+            },
+            "GeoFailed": {
+              "Type": "Pass",
+              "Parameters": { "result": { "step": "SyncGeo", "failed": true, "error.$": "$.error.Cause" } },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.ingest",
+      "Next": "SeedKnowledge"
+    },
+    "SeedKnowledge": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${SeedKnowledgeArn}", "Payload": {} },
+      "ResultSelector": { "result.$": "$.Payload" },
+      "ResultPath": "$.seed",
+      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 5, "MaxAttempts": 2, "BackoffRate": 2 }],
+      "Next": "PlanTrade"
+    },
+    "PlanTrade": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${PlanTradeArn}", "Payload": {} },
+      "ResultSelector": { "jobs.$": "$.Payload.jobs", "years.$": "$.Payload.years" },
+      "ResultPath": "$.plan",
+      "Next": "SyncTradeData"
+    },
+    "SyncTradeData": {
+      "Type": "Map",
+      "ItemsPath": "$.plan.jobs",
+      "MaxConcurrency": 1,
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "FetchComtrade",
+        "States": {
+          "FetchComtrade": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": { "FunctionName": "${SyncTradeArn}", "Payload.$": "$" },
+            "ResultSelector": { "cmd.$": "$.Payload.cmd", "year.$": "$.Payload.year", "reporters.$": "$.Payload.reporters" },
+            "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 10, "MaxAttempts": 3, "BackoffRate": 2 }],
+            "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "FetchFailed" }],
+            "End": true
+          },
+          "FetchFailed": {
+            "Type": "Pass",
+            "Parameters": { "cmd.$": "$.cmd", "year.$": "$.year", "failed": true },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.tradeJobs",
+      "Next": "ComputeRCA"
+    },
+    "ComputeRCA": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${ComputeRcaArn}", "Payload": {} },
+      "ResultSelector": { "result.$": "$.Payload" },
+      "ResultPath": "$.rca",
+      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 5, "MaxAttempts": 1 }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.rca", "Next": "BuildIndex" }],
+      "Next": "BuildIndex"
+    },
+    "BuildIndex": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${BuildIndexArn}",
+        "Payload": { "results": { "ingest.$": "$.ingest", "seed.$": "$.seed", "rca.$": "$.rca", "tradeJobs.$": "$.tradeJobs" } }
+      },
+      "ResultSelector": { "result.$": "$.Payload" },
+      "ResultPath": "$.index",
+      "End": true
+    }
+  }
+}

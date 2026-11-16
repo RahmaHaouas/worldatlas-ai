@@ -1,0 +1,51 @@
+{
+  "_readme": "Display names and search aliases. World Bank names such as 'Egypt, Arab Rep.' are kept as official_name; 'name' below is used for display. 'supplementary' lists territories not covered by the World Bank country API but present on the map (no statistics are invented for them).",
+  "display_names": {
+    "EGY": "Egypt", "KOR": "South Korea", "PRK": "North Korea", "IRN": "Iran", "RUS": "Russia",
+    "VNM": "Vietnam", "TUR": "Türkiye", "SYR": "Syria", "YEM": "Yemen", "VEN": "Venezuela",
+    "LAO": "Laos", "COD": "DR Congo", "COG": "Republic of the Congo", "GMB": "The Gambia",
+    "BHS": "The Bahamas", "KGZ": "Kyrgyzstan", "SVK": "Slovakia", "MKD": "North Macedonia",
+    "FSM": "Micronesia", "HKG": "Hong Kong", "MAC": "Macao", "PSE": "Palestine", "CZE": "Czechia",
+    "LCA": "Saint Lucia", "VCT": "Saint Vincent and the Grenadines", "KNA": "Saint Kitts and Nevis",
+    "CIV": "Côte d'Ivoire", "STP": "São Tomé and Príncipe", "CPV": "Cabo Verde", "BRN": "Brunei",
+    "USA": "United States", "GBR": "United Kingdom"
+  },
+  "aliases": {
+    "TUN": ["tunisia", "tunisie", "tunisian"],
+    "MAR": ["morocco", "maroc", "moroccan"],
+    "DZA": ["algeria", "algérie", "algerian"],
+    "EGY": ["egypt", "égypte", "egyptian"],
+    "ESP": ["spain", "espagne", "spanish"],
+    "ITA": ["italy", "italie", "italian"],
+    "FRA": ["france", "french", "français"],
+    "DEU": ["germany", "allemagne", "german"],
+    "GBR": ["united kingdom", "uk", "britain", "royaume-uni", "british"],
+    "USA": ["united states", "usa", "us", "america", "états-unis", "american"],
+    "CHN": ["china", "chine", "chinese"],
+    "JPN": ["japan", "japon", "japanese"],
+    "KOR": ["south korea", "korea", "corée", "korean"],
+    "IND": ["india", "inde", "indian"],
+    "BRA": ["brazil", "brésil", "brazilian"],
+    "GRC": ["greece", "grèce", "greek"],
+    "TUR": ["turkey", "türkiye", "turquie", "turkish"],
+    "RUS": ["russia", "russie", "russian"],
+    "SAU": ["saudi arabia", "arabie saoudite", "saudi"],
+    "ARE": ["uae", "united arab emirates", "emirates", "émirats"],
+    "CHE": ["switzerland", "suisse", "swiss"],
+    "NLD": ["netherlands", "pays-bas", "holland", "dutch"],
+    "TWN": ["taiwan", "taïwan"],
+    "MEX": ["mexico", "mexique", "mexican"],
+    "CIV": ["ivory coast", "côte d'ivoire", "cote d'ivoire"],
+    "VNM": ["vietnam", "viet nam", "vietnamese"],
+    "IRN": ["iran", "iranian"],
+    "NOR": ["norway", "norvège", "norwegian"],
+    "CHL": ["chile", "chilean"],
+    "PER": ["peru", "pérou", "peruvian"],
+    "ARG": ["argentina", "argentine", "argentinian"],
+    "COD": ["dr congo", "drc", "congo-kinshasa", "rdc"],
+    "ZAF": ["south africa", "afrique du sud"]
+  },
+  "supplementary": [
+    {"iso3": "TWN", "iso2": "TW", "name": "Taiwan", "region": "East Asia & Pacific", "capital": "Taipei", "latitude": 25.03, "longitude": 121.56}
+  ]
+}

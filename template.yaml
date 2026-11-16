@@ -1,0 +1,341 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  WorldAtlas AI - serverless global geospatial intelligence platform.
+  API Gateway (HTTP API) + Lambda + DynamoDB + S3 + CloudFront + Step Functions + EventBridge Scheduler + Amazon Bedrock.
+  Everything scales to zero: no servers, no containers, no pipelines.
+
+Parameters:
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+    Description: Bedrock model (or inference profile) used by the AI assistant, e.g. amazon.nova-lite-v1:0 or us.anthropic.claude-3-5-haiku-20241022-v1:0
+  BedrockRegion:
+    Type: String
+    Default: ""
+    Description: Region for Bedrock calls (empty = same region as the stack)
+  TradeYears:
+    Type: String
+    Default: "2022,2023"
+    Description: Comma-separated years pulled from UN Comtrade (used for RCA and trade evolution)
+  ComtradeApiKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: Optional free UN Comtrade subscription key (empty = keyless public preview endpoint)
+  SyncSchedule:
+    Type: String
+    Default: rate(7 days)
+    Description: EventBridge Scheduler expression for the data synchronization workflow
+
+Conditions:
+  HasBedrockRegion: !Not [!Equals [!Ref BedrockRegion, ""]]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    CodeUri: backend/src/
+    MemorySize: 512
+    Timeout: 15
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref AtlasTable
+        DATA_BUCKET: !Ref DataBucket
+        SITE_BUCKET: !Ref SiteBucket
+        TRADE_YEARS: !Ref TradeYears
+        LOG_LEVEL: INFO
+
+Resources:
+  # ------------------------------------------------------------------ storage
+  AtlasTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: PK, AttributeType: S }
+        - { AttributeName: SK, AttributeType: S }
+        - { AttributeName: GSI1PK, AttributeType: S }
+        - { AttributeName: GSI1SK, AttributeType: S }
+        - { AttributeName: GSI2PK, AttributeType: S }
+        - { AttributeName: GSI2SK, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1   # specialty -> countries
+          KeySchema:
+            - { AttributeName: GSI1PK, KeyType: HASH }
+            - { AttributeName: GSI1SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: GSI2   # listings: all countries / all specialties
+          KeySchema:
+            - { AttributeName: GSI2PK, KeyType: HASH }
+            - { AttributeName: GSI2SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+
+  DataBucket:   # private: RAG knowledge index
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+  SiteBucket:   # private: static frontend + world boundaries, served only through CloudFront
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+  SiteOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-site-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  SiteDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: WorldAtlas AI frontend
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: site
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            S3OriginConfig: { OriginAccessIdentity: "" }
+            OriginAccessControlId: !GetAtt SiteOAC.Id
+        DefaultCacheBehavior:
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6   # Managed-CachingOptimized
+        CustomErrorResponses:
+          - { ErrorCode: 403, ResponseCode: 200, ResponsePagePath: /index.html }
+          - { ErrorCode: 404, ResponseCode: 200, ResponsePagePath: /index.html }
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub "${SiteBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${SiteDistribution}"
+
+  # ------------------------------------------------------------------ API
+  AtlasApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowHeaders: [content-type]
+        MaxAge: 600
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 50
+        ThrottlingRateLimit: 20
+
+  CountryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Country Service - profiles, categories, sync metadata
+      Handler: handlers.countries.handler
+      Policies:
+        - DynamoDBReadPolicy: { TableName: !Ref AtlasTable }
+      Events:
+        List: { Type: HttpApi, Properties: { ApiId: !Ref AtlasApi, Method: GET, Path: /countries } }
+        Detail: { Type: HttpApi, Properties: { ApiId: !Ref AtlasApi, Method: GET, Path: "/countries/{iso3}" } }
+        Categories: { Type: HttpApi, Properties: { ApiId: !Ref AtlasApi, Method: GET, Path: /categories } }
+        Meta: { Type: HttpApi, Properties: { ApiId: !Ref AtlasApi, Method: GET, Path: /meta } }
+
+  SpecialtyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Specialty & Product Search Service
+      Handler: handlers.specialties.handler
+      Policies:
+        - DynamoDBReadPolicy: { TableName: !Ref AtlasTable }
+      Events:
+        Search: { Type: HttpApi, Properties: { ApiId: !Ref AtlasApi, Method: GET, Path: /specialties } }
+        Detail: { Type: HttpApi, Properties: { ApiId: !Ref AtlasApi, Method: GET, Path: "/specialties/{id}" } }
+
+  CompareFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Comparison Service
+      Handler: handlers.compare.handler
+      Policies:
+        - DynamoDBReadPolicy: { TableName: !Ref AtlasTable }
+      Events:
+        Compare: { Type: HttpApi, Properties: { ApiId: !Ref AtlasApi, Method: GET, Path: /compare } }
+
+  TradeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Trade Intelligence Service (exports, RCA, history)
+      Handler: handlers.trade.handler
+      Policies:
+        - DynamoDBReadPolicy: { TableName: !Ref AtlasTable }
+      Events:
+        Products: { Type: HttpApi, Properties: { ApiId: !Ref AtlasApi, Method: GET, Path: /trade/products } }
+        Product: { Type: HttpApi, Properties: { ApiId: !Ref AtlasApi, Method: GET, Path: "/trade/products/{hs}" } }
+        History: { Type: HttpApi, Properties: { ApiId: !Ref AtlasApi, Method: GET, Path: "/trade/products/{hs}/history" } }
+        Country: { Type: HttpApi, Properties: { ApiId: !Ref AtlasApi, Method: GET, Path: "/trade/countries/{iso3}" } }
+
+  AssistantFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: AI Assistant Service - RAG over the knowledge index with Amazon Bedrock
+      Handler: handlers.assistant.handler
+      MemorySize: 1024
+      Timeout: 29
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          BEDROCK_REGION: !If [HasBedrockRegion, !Ref BedrockRegion, !Ref "AWS::Region"]
+      Policies:
+        - S3ReadPolicy: { BucketName: !Ref DataBucket }
+        - Statement:
+            - Effect: Allow
+              Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+              Resource: "*"
+      Events:
+        Ask: { Type: HttpApi, Properties: { ApiId: !Ref AtlasApi, Method: POST, Path: /assistant } }
+
+  # ------------------------------------------------------------------ Data Update Service (Step Functions)
+  SyncCountriesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Pipeline - World Bank country registry, population, area
+      Handler: pipeline.sync_countries.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref AtlasTable }
+
+  SyncGeoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Pipeline - Natural Earth boundaries to S3
+      Handler: pipeline.sync_geo.handler
+      Timeout: 90
+      MemorySize: 1024
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref SiteBucket }
+
+  SeedKnowledgeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Pipeline - curated specialties knowledge base to DynamoDB
+      Handler: pipeline.seed_knowledge.handler
+      Timeout: 180
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref AtlasTable }
+
+  PlanTradeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Pipeline - build UN Comtrade job list
+      Handler: pipeline.trade.plan_handler
+      Timeout: 10
+
+  SyncTradeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Pipeline - fetch one UN Comtrade export query
+      Handler: pipeline.trade.sync_handler
+      Timeout: 120
+      Environment:
+        Variables:
+          COMTRADE_API_KEY: !Ref ComtradeApiKey
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref AtlasTable }
+
+  ComputeRcaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Pipeline - Revealed Comparative Advantage + claim verification
+      Handler: pipeline.trade.compute_handler
+      Timeout: 600
+      MemorySize: 1024
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref AtlasTable }
+
+  BuildIndexFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Pipeline - build RAG knowledge index in S3
+      Handler: pipeline.build_index.handler
+      Timeout: 300
+      MemorySize: 1024
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref AtlasTable }
+        - S3CrudPolicy: { BucketName: !Ref DataBucket }
+
+  DataSyncStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/sync.asl.json
+      DefinitionSubstitutions:
+        SyncCountriesArn: !GetAtt SyncCountriesFunction.Arn
+        SyncGeoArn: !GetAtt SyncGeoFunction.Arn
+        SeedKnowledgeArn: !GetAtt SeedKnowledgeFunction.Arn
+        PlanTradeArn: !GetAtt PlanTradeFunction.Arn
+        SyncTradeArn: !GetAtt SyncTradeFunction.Arn
+        ComputeRcaArn: !GetAtt ComputeRcaFunction.Arn
+        BuildIndexArn: !GetAtt BuildIndexFunction.Arn
+      Policies:
+        - LambdaInvokePolicy: { FunctionName: !Ref SyncCountriesFunction }
+        - LambdaInvokePolicy: { FunctionName: !Ref SyncGeoFunction }
+        - LambdaInvokePolicy: { FunctionName: !Ref SeedKnowledgeFunction }
+        - LambdaInvokePolicy: { FunctionName: !Ref PlanTradeFunction }
+        - LambdaInvokePolicy: { FunctionName: !Ref SyncTradeFunction }
+        - LambdaInvokePolicy: { FunctionName: !Ref ComputeRcaFunction }
+        - LambdaInvokePolicy: { FunctionName: !Ref BuildIndexFunction }
+      Events:
+        ScheduledSync:
+          Type: ScheduleV2   # Amazon EventBridge Scheduler
+          Properties:
+            ScheduleExpression: !Ref SyncSchedule
+            Description: Periodic refresh of WorldAtlas data
+
+Outputs:
+  ApiUrl:
+    Description: HTTP API base URL (NEXT_PUBLIC_API_URL)
+    Value: !Sub "https://${AtlasApi}.execute-api.${AWS::Region}.amazonaws.com"
+  SiteUrl:
+    Description: Public URL of the web app
+    Value: !Sub "https://${SiteDistribution.DomainName}"
+  SiteBucketName:
+    Value: !Ref SiteBucket
+  DataBucketName:
+    Value: !Ref DataBucket
+  DistributionId:
+    Value: !Ref SiteDistribution
+  StateMachineArn:
+    Value: !Ref DataSyncStateMachine
+  TableName:
+    Value: !Ref AtlasTable

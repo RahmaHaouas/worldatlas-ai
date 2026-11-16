@@ -1,0 +1,14 @@
+[
+  {"category_id": "agriculture", "category_name": "Agriculture & Food", "icon": "wheat", "color": "#4ade80",
+   "description": "Agricultural products, food specialties, traditional dishes and agricultural production strengths."},
+  {"category_id": "industry", "category_name": "Industry & Manufacturing", "icon": "factory", "color": "#60a5fa",
+   "description": "Automotive, aerospace, textiles, electronics, semiconductors, machinery, chemicals, pharmaceuticals and shipbuilding."},
+  {"category_id": "culture", "category_name": "Culture & Heritage", "icon": "landmark", "color": "#f472b6",
+   "description": "Traditional crafts, UNESCO-recognized heritage, music, arts, gastronomy and historical monuments."},
+  {"category_id": "technology", "category_name": "Technology & Innovation", "icon": "cpu", "color": "#a78bfa",
+   "description": "Artificial intelligence, software, semiconductors, robotics, biotechnology, telecommunications and innovation ecosystems."},
+  {"category_id": "resources", "category_name": "Natural Resources & Energy", "icon": "flame", "color": "#fbbf24",
+   "description": "Petroleum, natural gas, minerals, precious metals, phosphate, forests and renewable energy."},
+  {"category_id": "tourism", "category_name": "Tourism & Services", "icon": "plane", "color": "#22d3ee",
+   "description": "Cultural and natural tourism, medical tourism, financial services, education, transport and logistics."}
+]

@@ -1,0 +1,11 @@
+.aws-sam/
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/public/data/
+frontend/.env.local
+frontend/tsconfig.tsbuildinfo
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
